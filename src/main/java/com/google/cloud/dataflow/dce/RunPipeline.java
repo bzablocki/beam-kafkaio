@@ -15,7 +15,6 @@
  */
 package com.google.cloud.dataflow.dce;
 
-import com.google.api.services.bigquery.model.TableRow;
 import com.google.cloud.dataflow.dce.WatchForKafkaTopicPartitions.GenerateKafkaSourceDescriptor;
 import com.google.cloud.dataflow.dce.options.MyRunOptions;
 import com.google.common.collect.ImmutableMap;
@@ -23,12 +22,12 @@ import com.google.common.collect.Iterators;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.TypedRead;
 import org.apache.beam.sdk.io.gcp.bigquery.SchemaAndRecord;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.io.kafka.KafkaRecord;
 import org.apache.beam.sdk.io.kafka.KafkaSourceDescriptor;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.Impulse;
 import org.apache.beam.sdk.transforms.MapElements;
@@ -43,7 +42,6 @@ import org.apache.beam.sdk.transforms.windowing.Repeatedly;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionView;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.joda.time.Duration;
 
@@ -71,35 +69,25 @@ public class RunPipeline {
                 pipeline.apply(
                                 BigQueryIO.readTableRows()
                                         .from("dce-bzablocki-01:kafka_topics.topics_01")
-                                        .withMethod(BigQueryIO.TypedRead.Method.DIRECT_READ))
+                                        .withMethod(TypedRead.Method.DIRECT_READ))
+                        .apply(ParDo.of(new TableRowToKafkaSourceDescriptor()))
                         .apply(
-                                ParDo.of(
-                                        new DoFn<TableRow, KafkaSourceDescriptor>() {
-                                            @ProcessElement
-                                            public void process(
-                                                    @Element TableRow input,
-                                                    OutputReceiver<KafkaSourceDescriptor> o) {
-                                                o.output(
-                                                        KafkaSourceDescriptor.of(
-                                                                new TopicPartition(
-                                                                        (String)
-                                                                                input.get(
-                                                                                        "topic_name"),
-                                                                        0),
-                                                                null,
-                                                                null,
-                                                                null,
-                                                                null,
-                                                                null));
-                                            }
-                                        }))
-                        .apply(
+                                "Window",
                                 Window.<KafkaSourceDescriptor>into(new GlobalWindows())
                                         .triggering(
                                                 Repeatedly.forever(
-                                                        AfterProcessingTime
-                                                                .pastFirstElementInPane()))
+                                                        AfterProcessingTime.pastFirstElementInPane()
+                                                                .plusDelayOf(
+                                                                        Duration.standardSeconds(
+                                                                                5))))
                                         .discardingFiredPanes())
+                        // .apply(
+                        //         Window.<KafkaSourceDescriptor>into(new GlobalWindows())
+                        //                 .triggering(
+                        //                         Repeatedly.forever(
+                        //                                 AfterProcessingTime
+                        //                                         .pastFirstElementInPane()))
+                        //                 .discardingFiredPanes())
                         // .apply(Latest.globally())
                         .apply(View.asIterable());
 
