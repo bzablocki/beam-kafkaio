@@ -15,17 +15,15 @@
  */
 package com.google.cloud.dataflow.dce;
 
+import com.google.api.services.bigquery.model.TableRow;
 import com.google.cloud.dataflow.dce.WatchForKafkaTopicPartitions.GenerateKafkaSourceDescriptor;
-import com.google.cloud.dataflow.dce.WatchForKafkaTopicPartitions.GenerateKafkaSourceDescriptors;
 import com.google.cloud.dataflow.dce.options.MyRunOptions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Properties;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.io.GenerateSequence;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
+import org.apache.beam.sdk.io.gcp.bigquery.SchemaAndRecord;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.io.kafka.KafkaRecord;
 import org.apache.beam.sdk.io.kafka.KafkaSourceDescriptor;
@@ -33,9 +31,9 @@ import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.Impulse;
-import org.apache.beam.sdk.transforms.Latest;
 import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.SimpleFunction;
 import org.apache.beam.sdk.transforms.View;
 import org.apache.beam.sdk.transforms.windowing.AfterProcessingTime;
@@ -45,75 +43,11 @@ import org.apache.beam.sdk.transforms.windowing.Repeatedly;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionView;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.common.serialization.Deserializer;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.joda.time.Duration;
 
 public class RunPipeline {
-
-    public static class EmitSourceDescriptor extends DoFn<byte[], KafkaSourceDescriptor> {
-
-        private final PCollectionView<Iterable<KafkaSourceDescriptor>> sourceDescriptorsSideInput;
-
-        public EmitSourceDescriptor(
-                PCollectionView<Iterable<KafkaSourceDescriptor>> sourceDescriptorsSideInput) {
-            this.sourceDescriptorsSideInput = sourceDescriptorsSideInput;
-        }
-
-        @ProcessElement
-        public void processElement(
-                ProcessContext c, OutputReceiver<KafkaSourceDescriptor> outputReceiver) {
-            Iterable<KafkaSourceDescriptor> kafkaSourceDescriptors =
-                    c.sideInput(sourceDescriptorsSideInput);
-            for (KafkaSourceDescriptor sourceDescriptor : kafkaSourceDescriptors) {
-                outputReceiver.output(sourceDescriptor);
-            }
-        }
-    }
-
-    public static class MyKafkaConsumer<K, V> extends KafkaConsumer<K, V> {
-
-        public MyKafkaConsumer(Map<String, Object> configs) {
-            super(configs);
-            StringBuilder sb = new StringBuilder();
-            sb.append("bzablocki creating MyKafkaConsumer:\n");
-            for (Entry<String, Object> entry : configs.entrySet()) {
-                try {
-                    sb.append("    bzablocki entry ")
-                            .append(entry.getKey())
-                            .append(":")
-                            .append(entry.getValue())
-                            .append("\n");
-
-                } catch (Exception e) {
-                    sb.append("    bzablocki value for ")
-                            .append(entry.getKey())
-                            .append(" is not string")
-                            .append("\n");
-                }
-            }
-            System.out.println(sb);
-        }
-
-        public MyKafkaConsumer(Properties properties) {
-            super(properties);
-        }
-
-        public MyKafkaConsumer(
-                Properties properties,
-                Deserializer<K> keyDeserializer,
-                Deserializer<V> valueDeserializer) {
-            super(properties, keyDeserializer, valueDeserializer);
-        }
-
-        public MyKafkaConsumer(
-                Map<String, Object> configs,
-                Deserializer<K> keyDeserializer,
-                Deserializer<V> valueDeserializer) {
-            super(configs, keyDeserializer, valueDeserializer);
-        }
-    }
 
     public static void main(String[] args) {
 
@@ -124,10 +58,41 @@ public class RunPipeline {
 
         Pipeline pipeline = Pipeline.create(options);
 
+        SerializableFunction<SchemaAndRecord, BigQueryTopicData> rowToKafkaSourceDescriptor =
+                row -> {
+                    String topicName = (String) row.getRecord().get("topic_name");
+                    return new BigQueryTopicData(topicName);
+                };
         PCollectionView<Iterable<KafkaSourceDescriptor>> kafkaSourceDescriptorsSideInput =
                 // PCollection<KafkaSourceDescriptor> sourceDescriptorsSideInput =
-                pipeline.apply(GenerateSequence.from(0).withRate(1, Duration.standardSeconds(5L)))
-                        .apply(ParDo.of(new GenerateKafkaSourceDescriptors()))
+                // pipeline.apply(GenerateSequence.from(0).withRate(1,
+                // Duration.standardSeconds(5L)))
+                //         .apply(ParDo.of(new GenerateKafkaSourceDescriptors()))
+                pipeline.apply(
+                                BigQueryIO.readTableRows()
+                                        .from("dce-bzablocki-01:kafka_topics.topics_01")
+                                        .withMethod(BigQueryIO.TypedRead.Method.DIRECT_READ))
+                        .apply(
+                                ParDo.of(
+                                        new DoFn<TableRow, KafkaSourceDescriptor>() {
+                                            @ProcessElement
+                                            public void process(
+                                                    @Element TableRow input,
+                                                    OutputReceiver<KafkaSourceDescriptor> o) {
+                                                o.output(
+                                                        KafkaSourceDescriptor.of(
+                                                                new TopicPartition(
+                                                                        (String)
+                                                                                input.get(
+                                                                                        "topic_name"),
+                                                                        0),
+                                                                null,
+                                                                null,
+                                                                null,
+                                                                null,
+                                                                null));
+                                            }
+                                        }))
                         .apply(
                                 Window.<KafkaSourceDescriptor>into(new GlobalWindows())
                                         .triggering(
@@ -153,7 +118,6 @@ public class RunPipeline {
                 .apply(
                         "Read From Kafka",
                         KafkaIO.<String, String>readSourceDescriptors()
-                                .withConsumerFactoryFn(MyKafkaConsumer::new)
                                 .withBootstrapServers(
                                         "10.128.0.37:9092,10.128.0.34:9092,10.128.0.36:9092")
                                 // .withBootstrapServers("kafka-cluster-5-m-0:9092")
