@@ -18,55 +18,55 @@ package com.google.cloud.dataflow.dce;
 import com.google.cloud.dataflow.dce.options.MyRunOptions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.io.GenerateSequence;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.io.kafka.KafkaRecord;
 import org.apache.beam.sdk.io.kafka.KafkaSourceDescriptor;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
+import org.apache.beam.sdk.transforms.Impulse;
+import org.apache.beam.sdk.transforms.Latest;
 import org.apache.beam.sdk.transforms.MapElements;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SimpleFunction;
+import org.apache.beam.sdk.transforms.View;
+import org.apache.beam.sdk.transforms.windowing.AfterProcessingTime;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
+import org.apache.beam.sdk.transforms.windowing.Repeatedly;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.joda.time.Duration;
+import org.joda.time.Instant;
 
 public class RunPipeline {
 
     public static class EmitSourceDescriptor extends DoFn<byte[], KafkaSourceDescriptor> {
-        List<KafkaSourceDescriptor> sourceDescriptors =
-                List.of(
-                        KafkaSourceDescriptor.of(
-                                new TopicPartition("test-topic-1", 0),
-                                null,
-                                null,
-                                null,
-                                null,
-                                null),
-                        KafkaSourceDescriptor.of(
-                                new TopicPartition("test-topic-2", 0),
-                                null,
-                                null,
-                                null,
-                                null,
-                                null));
+
+        private final PCollectionView<Iterable<KafkaSourceDescriptor>> sourceDescriptorsSideInput;
+
+        public EmitSourceDescriptor(
+                PCollectionView<Iterable<KafkaSourceDescriptor>> sourceDescriptorsSideInput) {
+            this.sourceDescriptorsSideInput = sourceDescriptorsSideInput;
+        }
 
         @ProcessElement
         public void processElement(
-                @Element byte[] element, OutputReceiver<KafkaSourceDescriptor> outputReceiver) {
-            for (KafkaSourceDescriptor sourceDescriptor : sourceDescriptors) {
+                ProcessContext c, OutputReceiver<KafkaSourceDescriptor> outputReceiver) {
+            Iterable<KafkaSourceDescriptor> kafkaSourceDescriptors =
+                    c.sideInput(sourceDescriptorsSideInput);
+            for (KafkaSourceDescriptor sourceDescriptor : kafkaSourceDescriptors) {
                 outputReceiver.output(sourceDescriptor);
             }
         }
@@ -116,17 +116,17 @@ public class RunPipeline {
     }
 
     public static void main(String[] args) {
-        List<KafkaSourceDescriptor> sourceDescriptors = new ArrayList<>();
-        for (int i = 0; i < 10; i++) {
-            sourceDescriptors.add(
-                    KafkaSourceDescriptor.of(
-                            new TopicPartition("test-topic-" + i, 0),
-                            null,
-                            null,
-                            null,
-                            null,
-                            null));
-        }
+        // List<KafkaSourceDescriptor> sourceDescriptors = new ArrayList<>();
+        // for (int i = 0; i < 10; i++) {
+        //     sourceDescriptors.add(
+        //             KafkaSourceDescriptor.of(
+        //                     new TopicPartition("test-topic-" + i, 0),
+        //                     null,
+        //                     null,
+        //                     null,
+        //                     null,
+        //                     null));
+        // }
 
         PipelineOptionsFactory.register(DataflowPipelineOptions.class);
         MyRunOptions options =
@@ -134,16 +134,60 @@ public class RunPipeline {
         System.out.println(options);
 
         Pipeline pipeline = Pipeline.create(options);
-        pipeline.apply(Create.of(sourceDescriptors))
-                // .apply(Impulse.create())
-                //     .apply(ParDo.of(new EmitSourceDescriptor()))
+        // Create a side input that updates every 5 seconds.
+        // View as an iterable, not singleton, so that if we happen to trigger more
+        // than once before Latest.globally is computed we can handle both elements.
+        PCollectionView<Iterable<KafkaSourceDescriptor>> kafkaSourceDescriptorsSideInput =
+                // PCollection<KafkaSourceDescriptor> sourceDescriptorsSideInput =
+                pipeline.apply(GenerateSequence.from(0).withRate(1, Duration.standardSeconds(5L)))
+                        .apply(
+                                ParDo.of(
+                                        new DoFn<Long, KafkaSourceDescriptor>() {
+                                            @ProcessElement
+                                            public void process(
+                                                    @Element Long input,
+                                                    @Timestamp Instant timestamp,
+                                                    OutputReceiver<KafkaSourceDescriptor> o) {
+                                                // Replace map with test data from the placeholder
+                                                // external service.
+                                                // Add external reads here.
+                                                // o.output(PlaceholderExternalService.readTestData(timestamp));
+                                                System.out.println("bzablocki side input update!");
+                                                for (int i = 0; i < 2; i++) {
+                                                    KafkaSourceDescriptor kafkaSourceDescriptor =
+                                                            KafkaSourceDescriptor.of(
+                                                                    new TopicPartition(
+                                                                            "test-topic-" + i, 0),
+                                                                    null,
+                                                                    null,
+                                                                    null,
+                                                                    null,
+                                                                    null);
+                                                    o.output(kafkaSourceDescriptor);
+                                                }
+                                            }
+                                        }))
+                        .apply(
+                                Window.<KafkaSourceDescriptor>into(new GlobalWindows())
+                                        .triggering(
+                                                Repeatedly.forever(
+                                                        AfterProcessingTime
+                                                                .pastFirstElementInPane()))
+                                        .discardingFiredPanes())
+                        .apply(Latest.globally())
+                        .apply(View.asIterable());
+
+        pipeline
+                // .apply(Create.of(sourceDescriptors))
+                .apply(Impulse.create())
+                .apply(ParDo.of(new EmitSourceDescriptor(kafkaSourceDescriptorsSideInput)))
+                // pipeline.apply(Impulse.create())
                 .apply(
                         "Read From Kafka",
-                        KafkaIO. <String, String>
-                                readSourceDescriptors()
+                        KafkaIO.<String, String>readSourceDescriptors()
                                 .withConsumerFactoryFn(MyKafkaConsumer::new)
                                 .withBootstrapServers(
-                                        "10.128.0.28:9092,10.128.0.31:9092,10.128.0.27:9092")
+                                        "10.128.0.37:9092,10.128.0.34:9092,10.128.0.36:9092")
                                 // .withBootstrapServers("kafka-cluster-5-m-0:9092")
                                 // .withTopic("test-topic-01") // use withTopics(List<String>) to
                                 // read
