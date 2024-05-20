@@ -20,10 +20,14 @@ import java.util.List;
 import java.util.Objects;
 import org.apache.beam.sdk.io.kafka.KafkaSourceDescriptor;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.DoFn.Element;
+import org.apache.beam.sdk.transforms.DoFn.ProcessElement;
+import org.apache.beam.sdk.transforms.DoFn.Timestamp;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.Watch;
 import org.apache.beam.sdk.transforms.Watch.Growth.PollFn;
 import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.annotations.VisibleForTesting;
 import org.apache.kafka.common.TopicPartition;
 import org.joda.time.Instant;
@@ -76,6 +80,47 @@ class WatchForKafkaTopicPartitions {
             KafkaSourceDescriptor kafkaSourceDescriptor =
                     Objects.requireNonNull(elementKV.getValue());
             receiver.output(kafkaSourceDescriptor);
+        }
+    }
+
+    @VisibleForTesting
+    static class GenerateKafkaSourceDescriptor extends DoFn<byte[], KafkaSourceDescriptor> {
+        private final PCollectionView<Iterable<KafkaSourceDescriptor>> sourceDescriptorsSideInput;
+
+        public GenerateKafkaSourceDescriptor(
+                PCollectionView<Iterable<KafkaSourceDescriptor>> sourceDescriptorsSideInput) {
+            this.sourceDescriptorsSideInput = sourceDescriptorsSideInput;
+        }
+
+        @ProcessElement
+        public void processElement(
+                ProcessContext c, OutputReceiver<KafkaSourceDescriptor> outputReceiver) {
+            // public void processElement(@SideInput("kafkaSourceDescriptorsSideInput")
+            // Iterable<KafkaSourceDescriptor> kafkaSourceDescriptors,
+            // OutputReceiver<KafkaSourceDescriptor> outputReceiver) {
+            System.out.println("bzablocki GenerateKafkaSourceDescriptor processElement");
+            Iterable<KafkaSourceDescriptor> kafkaSourceDescriptors =
+                    c.sideInput(sourceDescriptorsSideInput);
+            for (KafkaSourceDescriptor sourceDescriptor : kafkaSourceDescriptors) {
+                outputReceiver.output(sourceDescriptor);
+            }
+        }
+    }
+
+    static class GenerateKafkaSourceDescriptors extends DoFn<Long, KafkaSourceDescriptor> {
+        @ProcessElement
+        public void process(
+                @Element Long input,
+                @Timestamp Instant timestamp,
+                OutputReceiver<KafkaSourceDescriptor> o) {
+            System.out.println("bzablocki side input update!");
+            for (int i = 0; i < 2; i++) {
+                TopicPartition topicPartition = new TopicPartition("test-topic-" + i, 0);
+                KafkaSourceDescriptor kafkaSourceDescriptor =
+                        KafkaSourceDescriptor.of(topicPartition, null, null, null, null, null);
+                System.out.println("bzablocki topicPartition: " + topicPartition);
+                o.output(kafkaSourceDescriptor);
+            }
         }
     }
 }
