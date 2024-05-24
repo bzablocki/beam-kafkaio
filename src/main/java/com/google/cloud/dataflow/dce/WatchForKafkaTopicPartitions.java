@@ -56,18 +56,25 @@ class WatchForKafkaTopicPartitions {
 
     @VisibleForTesting
     static List<KafkaSourceDescriptor> getAllTopicPartitions() {
-        List<KafkaSourceDescriptor> sourceDescriptors = new ArrayList<>();
-        for (int i = 0; i < 2; i++) {
-            sourceDescriptors.add(
+        try {
+            List<String> allTopics = BigQueryHelper.getAllTopics();
+
+            List<KafkaSourceDescriptor> sourceDescriptors = new ArrayList<>();
+            for (String topic : allTopics) {
+                sourceDescriptors.add(
                     KafkaSourceDescriptor.of(
-                            new TopicPartition("test-topic-" + i, 0),
-                            null,
-                            null,
-                            null,
-                            null,
-                            null));
+                        new TopicPartition(topic, 0),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null));
+            }
+            return sourceDescriptors;
+        } catch (InterruptedException e) {
+            System.out.println("bzablockilog error!!! " + e);
+            return List.of();
         }
-        return sourceDescriptors;
     }
 
     static class ConvertToDescriptor
