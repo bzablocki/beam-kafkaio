@@ -22,6 +22,7 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.Impulse;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.Watch;
 import org.apache.beam.sdk.transforms.Watch.Growth.PollFn;
 import org.apache.beam.sdk.values.KV;
@@ -34,15 +35,16 @@ import org.joda.time.Instant;
 public class SourceDescriptorDiscoverer
         extends PTransform<PBegin, PCollection<KafkaSourceDescriptor>> {
 
-    private final SerializableSupplier<ImmutableList<KafkaSourceDescriptor>>
-            kafkaSourceDescriptorsProvider;
+    private final SerializableSupplier<ImmutableList<String>> kafkaSourceDescriptorsProvider;
+    private SerializableFunction<String, ImmutableList<KafkaSourceDescriptor>> partitionsForTopicFn;
     private final Duration pollInterval;
 
     public SourceDescriptorDiscoverer(
-            SerializableSupplier<ImmutableList<KafkaSourceDescriptor>>
-                    kafkaSourceDescriptorsProvider,
+            SerializableSupplier<ImmutableList<String>> kafkaSourceDescriptorsProvider,
+            SerializableFunction<String, ImmutableList<KafkaSourceDescriptor>> partitionsForTopicFn,
             Duration pollInterval) {
         this.kafkaSourceDescriptorsProvider = kafkaSourceDescriptorsProvider;
+        this.partitionsForTopicFn = partitionsForTopicFn;
         this.pollInterval = pollInterval;
     }
 
@@ -51,26 +53,39 @@ public class SourceDescriptorDiscoverer
         return input.apply(Impulse.create())
                 .apply(
                         "Query for new Topics",
-                        Watch.growthOf(new WatchPartitionFn(kafkaSourceDescriptorsProvider))
+                        Watch.growthOf(
+                                        new WatchTopicPartitionFn(
+                                                kafkaSourceDescriptorsProvider,
+                                                partitionsForTopicFn))
                                 .withPollInterval(pollInterval))
                 .apply("Extract KafkaSourceDescriptors", ParDo.of(new ExtractSourceDescriptors()));
     }
 
-    static class WatchPartitionFn extends PollFn<byte[], KafkaSourceDescriptor> {
+    static class WatchTopicPartitionFn extends PollFn<byte[], KafkaSourceDescriptor> {
 
-        private final SerializableSupplier<ImmutableList<KafkaSourceDescriptor>>
-                kafkaSourceDescriptorsProvider;
+        private final SerializableSupplier<ImmutableList<String>> topicsSupplier;
+        private final SerializableFunction<String, ImmutableList<KafkaSourceDescriptor>>
+                topicToKafkaSourceDescriptorFn;
 
-        public WatchPartitionFn(
-                SerializableSupplier<ImmutableList<KafkaSourceDescriptor>>
-                        kafkaSourceDescriptorsProvider) {
-            this.kafkaSourceDescriptorsProvider = kafkaSourceDescriptorsProvider;
+        public WatchTopicPartitionFn(
+                SerializableSupplier<ImmutableList<String>> topicsSupplier,
+                SerializableFunction<String, ImmutableList<KafkaSourceDescriptor>>
+                        topicToKafkaSourceDescriptorFn) {
+            this.topicsSupplier = topicsSupplier;
+            this.topicToKafkaSourceDescriptorFn = topicToKafkaSourceDescriptorFn;
         }
 
         @Override
         public Watch.Growth.PollResult<KafkaSourceDescriptor> apply(byte[] element, Context c) {
             Instant now = Instant.now();
-            return Watch.Growth.PollResult.incomplete(now, kafkaSourceDescriptorsProvider.get())
+            ImmutableList<String> topics = topicsSupplier.get();
+            ImmutableList<KafkaSourceDescriptor> kafkaSourceDescriptors =
+                    topics.stream()
+                            .map(topicToKafkaSourceDescriptorFn::apply)
+                            .flatMap(ImmutableList::stream)
+                            .collect(ImmutableList.toImmutableList());
+
+            return Watch.Growth.PollResult.incomplete(now, kafkaSourceDescriptors)
                     .withWatermark(now);
         }
     }
