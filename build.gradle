@@ -22,7 +22,6 @@ ext {
 	appVersion = "0.0.1-SNAPSHOT"
 
 	beamVersion = "2.56.0"
-	beamKafkaVersion = "2.57.0-SNAPSHOT"
 	solaceVersion = "10.21.0"
 	secretManagerVersion = "2.37.0"
 	googleHttpClientVersion = "1.44.1"
@@ -91,7 +90,7 @@ dependencies {
 	runtimeOnly "org.apache.beam:beam-runners-direct-java:${beamVersion}"
 	implementation "org.apache.beam:beam-runners-google-cloud-dataflow-java:${beamVersion}"
 	implementation "org.apache.beam:beam-sdks-java-io-google-cloud-platform:${beamVersion}"
-	implementation "org.apache.beam:beam-sdks-java-io-kafka:${beamKafkaVersion}"
+	implementation "org.apache.beam:beam-sdks-java-io-kafka:${beamVersion}"
 	implementation "org.apache.kafka:kafka-clients:3.7.0"
 	implementation 'com.google.guava:guava:33.2.0-jre'
 

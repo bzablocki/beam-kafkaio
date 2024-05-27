@@ -18,15 +18,12 @@ package com.google.cloud.dataflow.dce.options;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 
 public interface MyRunOptions extends DataflowPipelineOptions {
-    // enum PipelineToRun {
-    //     PUBLISH_TO_SOLACE_DIRECT,
-    //     PUBLISH_TO_SOLACE_PERSISTENT,
-    //     READ_FROM_SOLACE
-    // }
-    //
-    // @Description("Pipeline to run")
-    // @Default.Enum("PUBLISH_TO_SOLACE_DIRECT")
-    // PipelineToRun getPipelineToRun();
-    //
-    // void setPipelineToRun(PipelineToRun name);
+
+    String getKafkaBootstrapServers();
+
+    void setKafkaBootstrapServers(String value);
+
+    String getBigQueryTableTopicsList();
+
+    void setBigQueryTableTopicsList(String value);
 }

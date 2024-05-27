@@ -15,149 +15,92 @@
  */
 package com.google.cloud.dataflow.dce;
 
-import com.google.cloud.dataflow.dce.WatchForKafkaTopicPartitions.ConvertToDescriptor;
-import com.google.cloud.dataflow.dce.WatchForKafkaTopicPartitions.WatchPartitionFn;
 import com.google.cloud.dataflow.dce.options.MyRunOptions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Properties;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.io.kafka.KafkaRecord;
-import org.apache.beam.sdk.io.kafka.KafkaSourceDescriptor;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
-import org.apache.beam.sdk.transforms.Impulse;
 import org.apache.beam.sdk.transforms.MapElements;
-import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SimpleFunction;
-import org.apache.beam.sdk.transforms.Watch;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollectionView;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.jetbrains.annotations.NotNull;
 import org.joda.time.Duration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class RunPipeline {
-
+    public static final Logger LOG = LoggerFactory.getLogger(RunPipeline.class);
 
     public static void main(String[] args) {
-
         PipelineOptionsFactory.register(DataflowPipelineOptions.class);
         MyRunOptions options =
-            PipelineOptionsFactory.fromArgs(args).withValidation().as(MyRunOptions.class);
-        System.out.println(options);
+                PipelineOptionsFactory.fromArgs(args).withValidation().as(MyRunOptions.class);
 
         Pipeline pipeline = Pipeline.create(options);
-        // Create a side input that updates every 5 seconds.
-        // View as an iterable, not singleton, so that if we happen to trigger more
-        // than once before Latest.globally is computed we can handle both elements.
 
-        pipeline
-            // .apply(Create.of(sourceDescriptors))
-            .apply(Impulse.create())
-            .apply(
-                "Match new TopicPartitions",
-                Watch.growthOf(new WatchPartitionFn())
-                    .withPollInterval(Duration.standardSeconds(5)))
-            .apply(ParDo.of(new ConvertToDescriptor()))
-            // .apply(ParDo.of(new ConvertToDescriptor(checkStopReadingFn, startReadTime,
-            // stopReadTime)))
-            // .apply(ParDo.of(new EmitSourceDescriptor(kafkaSourceDescriptorsSideInput)))
-            // pipeline.apply(Impulse.create())
-            .apply(
-                "Read From Kafka",
-                KafkaIO.<String, String>readSourceDescriptors()
-                    .withBootstrapServers(
-                        "10.128.0.54:9092,10.128.0.61:9092,10.128.0.53:9092")
-                    // .withBootstrapServers("kafka-cluster-5-m-0:9092")
-                    // .withTopic("test-topic-01") // use withTopics(List<String>) to
-                    // read
-                    // from multiple topics.
-                    .withKeyDeserializer(StringDeserializer.class)
-                    .withValueDeserializer(StringDeserializer.class)
+        pipeline.apply(
+                        "Discover Topics",
+                        new SourceDescriptorDiscoverer(
+                                new BigQueryKafkaSourceDescriptorsProvider(
+                                        options.getBigQueryTableTopicsList()),
+                                Duration.standardSeconds(5)))
+                .apply(
+                        "Read From Kafka",
+                        KafkaIO.<String, String>readSourceDescriptors()
+                                .withBootstrapServers(options.getKafkaBootstrapServers())
+                                .withKeyDeserializer(StringDeserializer.class)
+                                .withValueDeserializer(StringDeserializer.class)
+                                .withConsumerConfigUpdates(
+                                        ImmutableMap.of("group.id", "kafkaio-multiple-topics"))
+                                .withCreateTime()
+                                .withReadCommitted())
+                .apply("To KV with topic as a key", kafkaRecordToKV())
+                .apply("Window", Window.into(FixedWindows.of(Duration.standardSeconds(1))))
+                .apply("Group by topic", GroupByKey.create())
+                .apply("Log messages", logMessages());
+        pipeline.run().waitUntilFinish();
+    }
 
-                    // Above four are required configuration. returns
-                    // PCollection<KafkaRecord<String, String>>
-
-                    // Rest of the settings are optional :
-
-                    // you can further customize KafkaConsumer used to read the records
-                    // by adding more
-                    // settings for ConsumerConfig. e.g :
-                    .withConsumerConfigUpdates(
-                        ImmutableMap.of("group.id", "kafkaio-multiple-topics"))
-
-                    // set event times and watermark based on 'LogAppendTime'. To
-                    // provide a custom
-                    // policy see withTimestampPolicyFactory(). withProcessingTime() is
-                    // the default.
-                    // Use withCreateTime() with topics that have 'CreateTime'
-                    // timestamps.
-                    // .withLogAppendTime()
-                    .withCreateTime()
-                    // restrict reader to committed messages on Kafka (see method
-                    // documentation).
-                    .withReadCommitted()
-
-                // offset consumed by the pipeline can be committed back.
-                // .commitOffsetsInFinalize() //commitOffsetsInFinalize() is
-                // enabled, but group.id in Kafka consumer config is not set. Offset
-                // management requires group.id.
-
-                // Specified a serializable function which can determine whether to
-                // stop reading from given
-                // TopicPartition during runtime. Note that only {@link
-                // ReadFromKafkaDoFn} respect the
-                // signal.
-                // .withCheckStopReadingFn(new SerializedFunction<TopicPartition,
-                // Boolean>() {})
-
-                // If you would like to send messages that fail to be parsed from
-                // Kafka to an alternate sink,
-                // use the error handler pattern as defined in {@link ErrorHandler}
-                // .withBadRecordErrorHandler(errorHandler)
-
-                // finally, if you don't need Kafka metadata, you can drop it.g
-                // .withoutMetadata() // PCollection<KV<String, String>>
-            )
-            .apply(
-                "To KV",
-                MapElements.via(
-                    new SimpleFunction<
-                        KafkaRecord<String, String>,
-                        KV<String, KafkaRecord<String, String>>>() {
-                        @Override
-                        public KV<String, KafkaRecord<String, String>> apply(
-                            KafkaRecord<String, String> input) {
-                            return KV.of(input.getTopic(), input);
-                        }
-                    }))
-            .apply(Window.into(FixedWindows.of(Duration.standardSeconds(1))))
-            .apply(GroupByKey.create())
-            .apply(
-                "PassThrough",
-                MapElements.via(
-                    new SimpleFunction<
+    @NotNull private static MapElements<
+                    KV<String, Iterable<KafkaRecord<String, String>>>,
+                    KV<String, Iterable<KafkaRecord<String, String>>>>
+            logMessages() {
+        return MapElements.via(
+                new SimpleFunction<
                         KV<String, Iterable<KafkaRecord<String, String>>>,
                         KV<String, Iterable<KafkaRecord<String, String>>>>() {
-                        @Override
-                        public KV<String, Iterable<KafkaRecord<String, String>>> apply(
+                    @Override
+                    public KV<String, Iterable<KafkaRecord<String, String>>> apply(
                             KV<String, Iterable<KafkaRecord<String, String>>> s) {
 
-                            int numElems = Iterators.size(s.getValue().iterator());
-                            System.out.println("bzablockilog entry " +
-                                s.getKey() + ": " + numElems + " elems.");
-                            return s;
-                        }
-                    }));
-        pipeline.run().waitUntilFinish();
+                        int numberElements = Iterators.size(s.getValue().iterator());
+                        LOG.info(
+                                "log Entry with key {} has {} elements.",
+                                s.getKey(),
+                                numberElements);
+                        System.out.printf(
+                                "Entry with key %s has %d elements.\n", s.getKey(), numberElements);
+                        return s;
+                    }
+                });
+    }
+
+    @NotNull private static MapElements<KafkaRecord<String, String>, KV<String, KafkaRecord<String, String>>>
+            kafkaRecordToKV() {
+        return MapElements.via(
+                new SimpleFunction<>() {
+                    @Override
+                    public KV<String, KafkaRecord<String, String>> apply(
+                            KafkaRecord<String, String> input) {
+                        return KV.of(input.getTopic(), input);
+                    }
+                });
     }
 }
