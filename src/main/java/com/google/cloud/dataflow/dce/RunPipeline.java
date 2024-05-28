@@ -123,11 +123,10 @@ public class RunPipeline {
 
                         int numberElements = Iterators.size(s.getValue().iterator());
                         LOG.info(
-                                "log Entry with key {} has {} elements.",
+                                "Entry with key {} has {} elements.",
                                 s.getKey(),
                                 numberElements);
-                        System.out.printf(
-                                "Entry with key %s has %d elements.\n", s.getKey(), numberElements);
+
                         return s;
                     }
                 });

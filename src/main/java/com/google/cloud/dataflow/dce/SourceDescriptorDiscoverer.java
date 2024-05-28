@@ -31,10 +31,13 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.collect.ImmutableList;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class SourceDescriptorDiscoverer
         extends PTransform<PBegin, PCollection<KafkaSourceDescriptor>> {
 
+    public static final Logger LOG = LoggerFactory.getLogger(SourceDescriptorDiscoverer.class);
     private final SerializableSupplier<ImmutableList<String>> kafkaSourceDescriptorsProvider;
     private SerializableFunction<String, ImmutableList<KafkaSourceDescriptor>> partitionsForTopicFn;
     private final Duration pollInterval;
@@ -84,7 +87,8 @@ public class SourceDescriptorDiscoverer
                             .map(topicToKafkaSourceDescriptorFn::apply)
                             .flatMap(ImmutableList::stream)
                             .collect(ImmutableList.toImmutableList());
-
+            LOG.info(
+                    "Discovered kafkaSourceDescriptors {}", kafkaSourceDescriptors.toString());
             return Watch.Growth.PollResult.incomplete(now, kafkaSourceDescriptors)
                     .withWatermark(now);
         }
