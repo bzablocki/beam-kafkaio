@@ -23,19 +23,19 @@ import com.google.cloud.bigquery.JobId;
 import com.google.cloud.bigquery.JobInfo;
 import com.google.cloud.bigquery.QueryJobConfiguration;
 import com.google.cloud.bigquery.TableResult;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
+import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.collect.ImmutableList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class BigQueryHelper {
+class BigQueryHelper {
     public static final Logger LOG = LoggerFactory.getLogger(BigQueryHelper.class);
 
-    public static List<String> getAllTopics(String bqTable) throws InterruptedException {
+    public static ImmutableList<String> getAllTopics(String bqTable) throws InterruptedException {
         BigQuery bigquery = BigQueryOptions.getDefaultInstance().getService();
         QueryJobConfiguration queryConfig =
-                QueryJobConfiguration.newBuilder("SELECT * FROM `" + bqTable + "` LIMIT 10000")
+                QueryJobConfiguration.newBuilder(
+                                "SELECT topic_name FROM `" + bqTable + "` LIMIT 10000")
                         .setUseLegacySql(false)
                         .build();
 
@@ -59,7 +59,7 @@ public class BigQueryHelper {
         TableResult result = queryJob.getQueryResults();
         LOG.debug("BigQueryHelper: query results: " + result.toString());
 
-        List<String> topics = new ArrayList<>();
+        ImmutableList.Builder<String> topics = ImmutableList.builder();
 
         // Print all pages of the results.
         for (FieldValueList row : result.iterateAll()) {
@@ -68,6 +68,6 @@ public class BigQueryHelper {
             topics.add(topicName);
         }
 
-        return topics;
+        return topics.build();
     }
 }

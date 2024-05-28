@@ -18,6 +18,7 @@ package com.google.cloud.dataflow.dce;
 import com.google.cloud.dataflow.dce.options.MyRunOptions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
+import java.util.Map;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
@@ -25,10 +26,14 @@ import org.apache.beam.sdk.io.kafka.KafkaRecord;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.MapElements;
+import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.SimpleFunction;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.jetbrains.annotations.NotNull;
 import org.joda.time.Duration;
@@ -45,20 +50,56 @@ public class RunPipeline {
 
         Pipeline pipeline = Pipeline.create(options);
 
+        Class<StringDeserializer> keyDeserializer = StringDeserializer.class;
+        Class<StringDeserializer> valueDeserializer = StringDeserializer.class;
+
+        String groupIdKey = "group.id";
+        String groupIdValue = "kafkaio-multiple-topics";
+
+        // ---------------------------------
+        // Protected fields from KafkaIO, when(if) this becomes part of KafkaIO, we will not need to
+        // initialize it explicitly here, we will use the ones that are defined in the
+        // KafkaIO.Read
+        SerializableFunction<Map<String, Object>, Consumer<byte[], byte[]>> kafkaConsumerFactoryFn =
+                KafkaConsumer::new;
+
+        Map<String, Object> consumerProperties =
+                org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.collect.ImmutableMap.of(
+                        ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+                        keyDeserializer.getName(),
+                        ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+                        valueDeserializer.getName(),
+                        ConsumerConfig.RECEIVE_BUFFER_CONFIG,
+                        512 * 1024,
+                        ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+                        "latest",
+                        ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
+                        false,
+                        groupIdKey,
+                        groupIdValue,
+                        ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
+                        options.getKafkaBootstrapServers(),
+                        // use when configured with 'withReadCommitted'
+                        "isolation.level",
+                        "read_committed");
+        // ---------------------------------
+
         pipeline.apply(
                         "Discover Topics",
                         new SourceDescriptorDiscoverer(
-                                new BigQueryKafkaSourceDescriptorsProvider(
+                                new BigQueryKafkaTopicsProvider(
                                         options.getBigQueryTableTopicsList()),
+                                new TopicToKafkaSourceDescriptorFn(
+                                        kafkaConsumerFactoryFn, consumerProperties),
                                 Duration.standardSeconds(5)))
                 .apply(
                         "Read From Kafka",
                         KafkaIO.<String, String>readSourceDescriptors()
                                 .withBootstrapServers(options.getKafkaBootstrapServers())
-                                .withKeyDeserializer(StringDeserializer.class)
-                                .withValueDeserializer(StringDeserializer.class)
+                                .withKeyDeserializer(keyDeserializer)
+                                .withValueDeserializer(valueDeserializer)
                                 .withConsumerConfigUpdates(
-                                        ImmutableMap.of("group.id", "kafkaio-multiple-topics"))
+                                        ImmutableMap.of(groupIdKey, groupIdValue))
                                 .withCreateTime()
                                 .withReadCommitted())
                 .apply("To KV with topic as a key", kafkaRecordToKV())
@@ -82,11 +123,10 @@ public class RunPipeline {
 
                         int numberElements = Iterators.size(s.getValue().iterator());
                         LOG.info(
-                                "log Entry with key {} has {} elements.",
+                                "Entry with key {} has {} elements.",
                                 s.getKey(),
                                 numberElements);
-                        System.out.printf(
-                                "Entry with key %s has %d elements.\n", s.getKey(), numberElements);
+
                         return s;
                     }
                 });
@@ -99,7 +139,7 @@ public class RunPipeline {
                     @Override
                     public KV<String, KafkaRecord<String, String>> apply(
                             KafkaRecord<String, String> input) {
-                        return KV.of(input.getTopic(), input);
+                        return KV.of(input.getTopic() + "_" + input.getPartition(), input);
                     }
                 });
     }

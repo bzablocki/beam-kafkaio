@@ -21,7 +21,7 @@ ext {
 	appName = "KafkaIoMultipleTopics"
 	appVersion = "0.0.1-SNAPSHOT"
 
-	beamVersion = "2.56.0"
+	beamVersion = "2.54.0"
 	solaceVersion = "10.21.0"
 	secretManagerVersion = "2.37.0"
 	googleHttpClientVersion = "1.44.1"
