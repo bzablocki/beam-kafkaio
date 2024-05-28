@@ -39,7 +39,8 @@ public class SourceDescriptorDiscoverer
 
     public static final Logger LOG = LoggerFactory.getLogger(SourceDescriptorDiscoverer.class);
     private final SerializableSupplier<ImmutableList<String>> kafkaSourceDescriptorsProvider;
-    private SerializableFunction<String, ImmutableList<KafkaSourceDescriptor>> partitionsForTopicFn;
+    private final SerializableFunction<String, ImmutableList<KafkaSourceDescriptor>>
+            partitionsForTopicFn;
     private final Duration pollInterval;
 
     public SourceDescriptorDiscoverer(
@@ -87,8 +88,7 @@ public class SourceDescriptorDiscoverer
                             .map(topicToKafkaSourceDescriptorFn::apply)
                             .flatMap(ImmutableList::stream)
                             .collect(ImmutableList.toImmutableList());
-            LOG.info(
-                    "Discovered kafkaSourceDescriptors {}", kafkaSourceDescriptors.toString());
+            LOG.info("Discovered kafkaSourceDescriptors {}", kafkaSourceDescriptors.toString());
             return Watch.Growth.PollResult.incomplete(now, kafkaSourceDescriptors)
                     .withWatermark(now);
         }
