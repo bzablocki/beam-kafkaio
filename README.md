@@ -1,62 +1,70 @@
-# Sample streaming pipeline
+# Reading from KafkaIO with external, dynamic topic management and automatic partition discovery.
 
-This repository contains a streaming Dataflow pipeline reading data from Pubsub and recovering the sessions from
-potentially unordered data, by using a common key to all the points received for the same vehicle.
+This code sample enhances KafkaIO reading with:
 
-Then we apply both windowing and stateful DoFns, to show how we can recover sessions and to compare the performance of
-both approaches.
+- External topic management: Topics are maintained in BigQuery, providing
+  flexibility.
+- Dynamic partition discovery: New partitions are automatically detected and
+  included.
 
-## Data input
+## Key features
 
-We are using here a public PubSub topic with data, so we don't need to setup our own to run this pipeline.
+- BigQuery integration: Leverages BigQuery to store and manage the list of Kafka
+  topics.
+- Periodic topic updates: The pipeline regularly queries BigQuery for the latest
+  topic list, adapting to changes.
+- Dynamic partition handling: Kafka is queried for new partitions, ensuring
+  comprehensive data consumption.
 
-The topic is `projects/pubsub-public-data/topics/taxirides-realtime`.
+## How it works
 
-That topic contains messages from the NYC Taxi Ride dataset. Here is a sample of the data contained in a message in
-that topic:
+1. The pipeline periodically queries a BigQuery table. In the current
+   implementation the table has to have a `topic_name` column.
+   for the current list of topics.
+2. For the list of topics, the pipeline queries Kafka for partitions.
+3. If the list of topics or partitions has changed, the pipeline dynamically
+   adds them as sources.
 
-```json
-{
-"ride_id": "328bec4b-0126-42d4-9381-cb1dbf0e2432",
-"point_idx": 305,
-"latitude": 40.776270000000004,
-"longitude": -73.99111,
-"timestamp": "2020-03-27T21:32:51.48098-04:00",
-"meter_reading": 9.403651,
-"meter_increment": 0.030831642,
-"ride_status": "enroute",
-"passenger_count": 1
-}
+## Important considerations
+
+- This approach, similar to Kafka's dynamicRead, requires careful consideration
+  of
+  race conditions. Consult the KafkaIO documentation for details.
+- Refer to the `com.google.cloud.dataflow.dce.BigQueryKafkaTopicsProvider`
+  implementation for BigQuery interaction details. Any other source of truth can
+  be added, as long as it implements
+  the `SerializableSupplier<ImmutableList<String>>` interface.
+- To change the frequency of querying the BigQuery table and kafka admin, adjust
+  the parameter in the "Discover Topics and Partitions" step in the pipeline
+  definition (`RunPipeline.java`). 
+
+## How to run
+
+Example run command:
+
+```bash
+readonly PROJECT=<your-project-id>
+readonly REGION=us-central1
+readonly NETWORK=regions/$REGION/subnetworks/default
+readonly TEMP_LOCATION=gs://$PROJECT-beam-playground/tmp
+readonly RUNNER=DataflowRunner
+readonly BOOTSTRAP_SERVERS=<comma-separated list of servers, example: 10.128.0.10:9092,10.128.0.11:9092,10.128.0.12:9092>
+readonly BIG_QUERY_TABLE_TOPICS_LIST=<fully qualified table name, example: my-project.my-dataset.my-table>
+
+./gradlew run -DmainClass=com.google.cloud.dataflow.dce.RunPipeline -Pargs=" \
+--streaming \
+--enableStreamingEngine \
+--autoscalingAlgorithm=THROUGHPUT_BASED \
+--runner=$RUNNER \
+--project=$PROJECT \
+--tempLocation=$TEMP_LOCATION \
+--region=$REGION \
+--subnetwork=$NETWORK \
+--experiments=use_network_tags=ssh;dataflow \
+--usePublicIps=false \
+--workerMachineType=n2-standard-2 \
+--numWorkers=1 \
+--maxNumWorkers=10 \
+--kafkaBootstrapServers=$BOOTSTRAP_SERVERS \
+--bigQueryTableTopicsList=$BIG_QUERY_TABLE_TOPICS_LIST"
 ```
-
-But the messages also contain metadata, that is useful for streaming pipelines.  In this case, the messages contain an
-attribute of name `ts`, which contains  the same timestamp as the field of name `timestamp` in the data. Remember that
-PubSub treats the data as just a string of bytes (in topics with no schema), so it does not *know* anything about the
-data itself. The metadata fields are normally used to publish messages with specific ids and/or timestamps.
-
-To inspect the messages from this topic, you can create a subscription, and then  pull some messages.
-
-To create a subscription, use the gcloud cli utility (installed by default in  the Cloud Shell):
-
-```
-export TOPIC=projects/pubsub-public-data/topics/taxirides-realtime
-gcloud pubsub subscriptions create taxis --topic $TOPIC
-```
-
-To pull messages:
-
-```gcloud pubsub subscriptions pull taxis --limit 3```
-
-or if you have jq (for pretty printing of JSON)
-
-```gcloud pubsub subscriptions pull taxis --limit 3 | grep " {" | cut -f 2 -d ' ' | jq```
-
-## Run job
-
-First set the environment variables by running
-
-`source ./scripts/01_set_env_variables.sh`
-
-and then run the job with
-
-`./scripts/02_run_dataflow.sh`

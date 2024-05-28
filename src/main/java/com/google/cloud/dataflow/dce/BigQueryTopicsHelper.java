@@ -28,8 +28,8 @@ import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.collect.Immuta
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-class BigQueryHelper {
-    public static final Logger LOG = LoggerFactory.getLogger(BigQueryHelper.class);
+class BigQueryTopicsHelper {
+    public static final Logger LOG = LoggerFactory.getLogger(BigQueryTopicsHelper.class);
 
     public static ImmutableList<String> getAllTopics(String bqTable) throws InterruptedException {
         BigQuery bigquery = BigQueryOptions.getDefaultInstance().getService();

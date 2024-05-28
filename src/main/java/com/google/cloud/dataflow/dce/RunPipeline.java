@@ -58,8 +58,8 @@ public class RunPipeline {
 
         // ---------------------------------
         // Protected fields from KafkaIO, when(if) this becomes part of KafkaIO, we will not need to
-        // initialize it explicitly here, we will use the ones that are defined in the
-        // KafkaIO.Read
+        // initialize it explicitly here, we will use the ones that are defined with the
+        // KafkaIO.readSourceDescriptors()
         SerializableFunction<Map<String, Object>, Consumer<byte[], byte[]>> kafkaConsumerFactoryFn =
                 KafkaConsumer::new;
 
@@ -85,7 +85,7 @@ public class RunPipeline {
         // ---------------------------------
 
         pipeline.apply(
-                        "Discover Topics",
+                        "Discover Topics and Partitions",
                         new SourceDescriptorDiscoverer(
                                 new BigQueryKafkaTopicsProvider(
                                         options.getBigQueryTableTopicsList()),
@@ -122,10 +122,7 @@ public class RunPipeline {
                             KV<String, Iterable<KafkaRecord<String, String>>> s) {
 
                         int numberElements = Iterators.size(s.getValue().iterator());
-                        LOG.info(
-                                "Entry with key {} has {} elements.",
-                                s.getKey(),
-                                numberElements);
+                        LOG.info("Entry with key {} has {} elements.", s.getKey(), numberElements);
 
                         return s;
                     }

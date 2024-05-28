@@ -33,7 +33,7 @@ public class BigQueryKafkaTopicsProvider implements SerializableSupplier<Immutab
     @Override
     public ImmutableList<String> get() {
         try {
-            return BigQueryHelper.getAllTopics(bqTable);
+            return BigQueryTopicsHelper.getAllTopics(bqTable);
         } catch (InterruptedException e) {
             // todo test what happens when this is thrown
             throw new RuntimeException(e);
