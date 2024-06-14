@@ -21,8 +21,10 @@ This code sample enhances KafkaIO reading with:
 1. The pipeline periodically queries a BigQuery table. In the current
    implementation the table has to have a `topic_name` column.
    for the current list of topics.
-2. For the list of topics, the pipeline queries Kafka for partitions.
-3. If the list of topics or partitions has changed, the pipeline dynamically
+2. For each topic from the list of topics, the pipeline queries Kafka for
+   available partitions for that topic. This ensures new partitions are also
+   dynamically discovered.
+4. If the list of topics or partitions has changed, the pipeline dynamically
    adds them as sources.
 
 ## Important considerations
